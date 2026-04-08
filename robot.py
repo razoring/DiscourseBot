@@ -18,7 +18,7 @@ class Robot(commands.Cog):
     async def getConversationContext(self, msg: discord.Message):
         messages = [{"role": ("assistant" if msg.author == self.bot.user else "user"), "content": msg.content}]
         current = msg
-        
+
         while current.reference and current.reference.message_id:
             if isinstance(current.reference.resolved, discord.Message): current = current.reference.resolved
             else:
@@ -52,15 +52,16 @@ class Robot(commands.Cog):
         await interaction.followup.send(reply.message.content)
 
     @commands.command(name="reload")
+    @commands.is_owner()
     async def reload(self, ctx):
         await self.bot.reload_extension("robot")
         await self.bot.tree.sync()
         await ctx.send("Reloaded robot.py and synced commands")
 
     @commands.command(name="sync")
+    @commands.is_owner()
     async def sync(self, ctx):
         synced = await self.bot.tree.sync()
         await ctx.send(f"Synced {len(synced)} commands globally")
 
-async def setup(bot):
-    await bot.add_cog(Robot(bot))
+async def setup(bot): await bot.add_cog(Robot(bot))
