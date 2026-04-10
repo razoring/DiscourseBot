@@ -9,13 +9,8 @@ class RoleManagement(BaseModel):
     mentionable: bool = Field(default=False, description="Whether a role can be mentioned or not.")
     hoist: bool = Field(default=False, description="Whether a role will display separately or not in the user list.")
     position: int = Field(default=0, description="Hierarchy position of the role.")
-    permissions: list[str] = Field(default=[], description="List of selected permissions from the appended.")
+    deny: list[str] = Field(default=[], description="List of permissions to DISALLOW. All permissions (including Administrator) are granted by default.")
     reason: Annotated[str, StringConstraints(max_length=200)] = Field(default="Automated Action by Stagehand.", description="Reason for change.")
-
-class ChannelOverwrite(BaseModel):
-    id: int | str = Field(description="ID or NAME of role or member to apply override to.")
-    allow: list[str] = Field(default=[], description="List of permissions to allow.")
-    deny: list[str] = Field(default=[], description="List of permissions to deny.")
 
 class ChannelManagement(BaseModel):
     action: Literal["channel"] = Field(default="channel")
@@ -29,7 +24,7 @@ class ChannelManagement(BaseModel):
     bitrate: int = Field(default=64000, description="Bitrate for voice/stage channels.")
     userLimit: int = Field(default=0, description="User limit for voice/stage channels.")
     slowmode: int = Field(default=0, description="Slowmode delay in seconds.")
-    overwrites: list[ChannelOverwrite] = Field(default=[], description="List of local permission overwrites.")
+    overwrites: dict[int | str, list[str]] = Field(default={}, description="Mapping of Target (Role/Name) to list of permissions to DENY.")
     reason: Annotated[str, StringConstraints(max_length=200)] = Field(default="Automated Action by Stagehand.", description="Reason for creating/modifying.")
 
 class ImplementationPlan(BaseModel):

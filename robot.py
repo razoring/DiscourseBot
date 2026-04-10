@@ -1,3 +1,4 @@
+import ast
 import inspect
 import json
 import asyncio
@@ -15,15 +16,18 @@ from models import ImplementationPlan
 
 class Robot(commands.Cog):
     def __init__(self, bot):
-        self.bot = bot
-        self.soul = ""
+        self.bot:discord.ClientUser = bot
+        self.model="gemma4:e2b"
+        self.chat = {"model":self.model, "think": True, "format": ImplementationPlan.model_json_schema()}
         
+        self.soul = ""
         with open("system/plan.md","r") as file:
             self.soul = file.read()
+            file.close() # close buffer
 
     @commands.Cog.listener()
     async def on_ready(self):
-        await AsyncClient().chat(model="gemma4:e2b",messages=[{"role": "user","content": "Hello world!"}],think=False) # cold-star LLM
+        await AsyncClient().chat(model=self.model, messages=[{"role":"user","content":"Hello world!"}],think=False) # cold-start LLM
 
     @commands.Cog.listener()
     async def on_message(self, msg: discord.Message):
@@ -35,7 +39,7 @@ class Robot(commands.Cog):
                 context = await self.getContext(msg)
                 async with msg.channel.typing():
                     # Request with JSON schema to enforce the ImplementationPlan structure
-                    reply: ChatResponse = await AsyncClient().chat(model="gemma4:e2b",messages=context,think=True,format=ImplementationPlan.model_json_schema())
+                    reply: ChatResponse = await AsyncClient().chat(**self.chat, messages=context)
                     parts = await self.processResponse(msg.guild, reply.message.content)
                     
                     for i, text in enumerate(parts):
@@ -44,27 +48,37 @@ class Robot(commands.Cog):
 
     @app_commands.command(name="plan", description="Instruct Stagehand to create an implementation plan")
     @app_commands.describe(instructions="Instructions to send")
-    async def plan(self,interaction: discord.Interaction, instructions: str):
+    async def plan(self, interaction: discord.Interaction, instructions: str):
         await interaction.response.defer()
         content = await self.getPlan(interaction.guild)
-        reply: ChatResponse = await AsyncClient().chat( model="gemma4:e2b",messages=[{"role":"system","content":content},{"role": "user","content": instructions}],think=True,format=ImplementationPlan.model_json_schema())
+        reply: ChatResponse = await AsyncClient().chat(messages=[{"role":"system","content":content},{"role": "user","content":instructions}], **self.chat)
         messages = await self.processResponse(interaction.guild, reply.message.content)
         for i,msgText in enumerate(messages):
             if i == 0: await interaction.followup.send(msgText)
-            else: await interaction.channel.send(msgText)
+            else: await interaction.followup.send(msgText)
 
     @commands.command(name="reload")
     @commands.is_owner()
-    async def reload(self,ctx):
+    async def reload(self, ctx):
         await self.bot.reload_extension("robot")
         await self.bot.tree.sync()
         await ctx.send("Reloaded robot.py and synced commands")
 
     @commands.command(name="sync")
     @commands.is_owner()
-    async def sync(self,ctx):
+    async def sync(self, ctx):
         synced = await self.bot.tree.sync()
         await ctx.send(f"Synced {len(synced)} commands globally")
+
+    @commands.command(name="test")
+    @commands.is_owner()
+    async def test(self, ctx:discord.Interaction):
+        test = "{'comments': 'A new text channel named general will be created. No specific permissions will be configured for it.', 'actions': [{'action': 'channel', 'id': None, 'name': 'general', 'type': 'text', 'topic': 'General discussion.', 'nsfw': False, 'category': 1492042343661047860, 'position': None, 'bitrate': 64000, 'userLimit': 0, 'slowmode': 0, 'overwrites': [], 'reason': 'Automated Action by Stagehand.'}]}"
+        parsed = ast.literal_eval(test)
+        parsed["actions"][0].pop("action")
+        args = parsed["actions"][0]
+        await self.channelManagement(guild=ctx.guild, **args)
+        
 
     ## PRELIMINARIES
     def ErrorHandler(func):
@@ -95,7 +109,7 @@ class Robot(commands.Cog):
         return ref
 
     async def getContext(self, msg: discord.Message):
-        content = await self.getTools(msg.guild)
+        content = self.soul
         messages = [{"role":"system","content":content},{"role": ("assistant" if msg.author == self.bot.user else "user"),"content": msg.content}]
         current = msg
 
@@ -121,13 +135,14 @@ class Robot(commands.Cog):
             for field_name,field_info in tool.model_fields.items(): updated += f"\t- {field_name}: {field_info.description}\n"
         
         updated += "\n## ROLE PERMISSIONS\n"
+        updated += "By default, ALL permissions (including Administrator) are ENABLED (True). You only need to list permissions you wish to DISABLE in the 'deny' field.\n"
         for name, value in iter(discord.Permissions.all()):  updated += f"- {name}:True/False\n"
 
         if guild:
             updated += "\n## EXISTING ROLES\n"
             roles = await self.listRoles(guild)
             if isinstance(roles, list):
-                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): {','.join(role['permissions'])}\n"
+                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: all, Denied: {','.join(role['denied'])}\n"
             else: updated += f"Error fetching roles: {roles}\n"
             
             updated += "\n## EXISTING CATEGORIES\n"
@@ -143,14 +158,9 @@ class Robot(commands.Cog):
                     if ch['type'] != "category":
                         p_text = ""
                         for ow in ch['overwrites']:
-                            p_text += f"{ow['target']}({ow['type']}): +{','.join(ow['allow'])}, -{','.join(ow['deny'])} | "
+                            p_text += f"{ow['target']}({ow['type']}): -{','.join(ow['deny'])} | "
                         updated += f"- Name: '{ch['name']}' (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
             else: updated += f"Error fetching channels: {channels}\n"
-        
-        updated += "\n## USAGE GUIDELINES\n"
-        updated += "1. 'name' must be a human-readable ROLE or CHANNEL name (e.g.,'Mod','Lounge').\n"
-        updated += "2. NEVER put technical strings or permission names (like 'view_channel') in the 'name' field.\n"
-        updated += "3. Avoid asking structural questions. Focus on the intent and providing the plan directly.\n"
         
         print(updated)
         return updated
@@ -172,8 +182,11 @@ class Robot(commands.Cog):
                         if "id" in act: act["id"] = self.resolveId(guild, act["id"], dtype)
                         if "category" in act: act["category"] = self.resolveId(guild, act["category"], "channel")
                         if "overwrites" in act:
-                            for ow in act["overwrites"]:
-                                if "id" in ow: ow["id"] = self.resolveId(guild, ow["id"], "role")
+                            new_ow = {}
+                            for target_ref, deny_list in act["overwrites"].items():
+                                resolved = self.resolveId(guild, target_ref, "role")
+                                new_ow[resolved] = deny_list
+                            act["overwrites"] = new_ow
 
                     plan = ImplementationPlan(**data)
                     response = plan.model_dump()
@@ -220,23 +233,21 @@ class Robot(commands.Cog):
                     channel = guild.get_channel(itemId)
                     name = channel.name if channel else f"Unknown ({itemId})"
                     toolDiff.append(f"--​- '#{name}'")
-            elif actionType == "role" or any(k in data for k in ["permissions", "colour", "hoist", "mentionable"]):
+            elif actionType == "role" or any(k in data for k in ["deny", "colour", "hoist", "mentionable"]):
                 itemId = data.get("id")
                 itemName = data.get("name","New Role")
-                newPerms = data.get("permissions",[])
+                deny_list = data.get("deny",[])
                 
                 if itemId and not isinstance(itemId, str): # Modify Role
                     oldRole = guild.get_role(itemId)
                     toolDiff.append(f"*** '@{itemName}'")
                     if oldRole:
-                        oldPerms = [n for n,v in oldRole.permissions if v]
-                        added = [p for p in newPerms if p not in oldPerms]
-                        removed = [p for p in oldPerms if p not in newPerms]
-                        for p in added: toolDiff.append(f"+​++ {p}")
-                        for p in removed: toolDiff.append(f"--​- {p}")
+                        # Logic: show what changed from the current state to the new 'deny' based state
+                        # Or simply show what is specifically being DENIED now.
+                        for p in deny_list: toolDiff.append(f"--​- {p} (DENIED)")
                 else: # create Role
-                    toolDiff.append(f"+​++ '@{itemName}'")
-                    for p in newPerms: toolDiff.append(f"+​++ {p}")
+                    toolDiff.append(f"+​++ '@{itemName}' (All Allowed by Default)")
+                    for p in deny_list: toolDiff.append(f"--​- {p} (DENIED)")
             elif actionType == "channel" or any(k in data for k in ["topic", "nsfw", "overwrites", "userLimit"]):
                 itemId = data.get("id")
                 itemName = data.get("name","New Channel")
@@ -247,13 +258,11 @@ class Robot(commands.Cog):
                 else: # Create
                     toolDiff.append(f"+​++ '#{itemName}'")
                 
-                for ow in newOverwrites:
-                    targetId = ow.get("id")
+                for targetId, denyList in newOverwrites.items():
                     target = guild.get_role(targetId) if guild else None
                     targetName = target.name if target else f"Unknown ({targetId})"
                     prefix = "@" if not target or isinstance(target, discord.Role) else ""
-                    for p in ow.get('allow', []): toolDiff.append(f"+​++ {prefix}{targetName}: {p}")
-                    for p in ow.get('deny', []): toolDiff.append(f"--​- {prefix}{targetName}: {p}")
+                    for p in denyList: toolDiff.append(f"--​- {prefix}{targetName}: {p} (DENIED)")
             
             # check if adding this tool exceeds chunk limit (1900 to stay safe)
             potentialLength = sum(len(line)+1 for line in currentDiff)+sum(len(line)+1 for line in toolDiff)+len(sep)+20
@@ -281,19 +290,23 @@ class Robot(commands.Cog):
         roles = []
         if not guild.roles: return []
         for role in guild.roles:
-            perms = [name for name,value in role.permissions if value]
-            roles.append({
-                "name":role.name,
-                "id":role.id,
-                "position":role.position,
-                "permissions":perms
-            })
+            if role.name != "Stagehand":
+                denied = [name for name,value in role.permissions if not value]
+                roles.append({
+                    "name":role.name,
+                    "id":role.id,
+                    "position":role.position,
+                    "denied":denied
+                })
         roles.sort(key=lambda r: r["position"],reverse=True)
         return roles
     
     @ErrorHandler
-    async def roleManagement(self, guild:discord.Guild, name:str, id:int=None, colour:str="#000000", hoist:bool=False, mentionable:bool=False, position:int=0, permissions:list=None, reason:str="Automated Action by Stagehand."):
-        permsObj = discord.Permissions(**{p: True for p in permissions}) if permissions else discord.Permissions.none()
+    async def roleManagement(self, guild:discord.Guild, name:str, id:int=None, colour:str="#000000", hoist:bool=False, mentionable:bool=False, position:int=0, deny:list=None, reason:str="Automated Action by Stagehand."):
+        permsObj = discord.Permissions.all()
+        if deny:
+            for p in deny:
+                if hasattr(permsObj, p): setattr(permsObj, p, False)
         colourHex = colour.replace("#", "")
         colourObj = discord.Color(int(colourHex, 16)) if colourHex else discord.Color.default()
         
@@ -328,9 +341,9 @@ class Robot(commands.Cog):
             for target, overwrite in channel.overwrites.items():
                 allow = [n for n, v in overwrite if v is True]
                 deny = [n for n, v in overwrite if v is False]
-                target_name = target.name if hasattr(target, "name") else str(target)
+                name = target.name if hasattr(target, "name") else str(target)
                 overwrites.append({
-                    "target": target_name,
+                    "target": name,
                     "id": target.id,
                     "type": "role" if isinstance(target, discord.Role) else "member",
                     "allow": allow,
@@ -347,25 +360,52 @@ class Robot(commands.Cog):
         return channels
     
     @ErrorHandler
-    async def channelManagement(self, guild:discord.Guild, datatype:discord.ChannelType, name:str, id:int=None, topic:str=None, nsfw:bool=False, category:int=None, bitrate:int=64000, userLimit:int=0, slowmode:int=0, overwrites:list=None, reason:str="Automated Action by Stagehand.", position:int=None):
+    async def channelManagement(self, guild:discord.Guild, type:discord.ChannelType|str|int, name:str, id:int|str|None=None, topic:str=None, nsfw:bool=False, category:int|str|None=None, bitrate:int=64000, userLimit:int=0, slowmode:int=0, overwrites:dict=None, reason:str="Automated Action by Stagehand.", position:int=None):
+        # Resolve ID and Category
+        id = self.resolveId(guild, id, "channel")
+        category = self.resolveId(guild, category, "channel")
+        
+        # Resolve Channel Type from int or str
+        if isinstance(type, str):
+            mapping = {
+                "text": discord.ChannelType.text,
+                "voice": discord.ChannelType.voice,
+                "category": discord.ChannelType.category,
+                "news": discord.ChannelType.news,
+                "forum": discord.ChannelType.forum,
+                "stage": discord.ChannelType.stage_voice,
+                "public_thread": discord.ChannelType.public_thread,
+                "private_thread": discord.ChannelType.private_thread,
+                "announcement": discord.ChannelType.news,
+            }
+            type = mapping.get(type.lower(), discord.ChannelType.text)
+        elif isinstance(type, int):
+            type = discord.ChannelType(type)
+
         channel = None
         targets = {}
         if overwrites:
-            for ow in overwrites:
-                target = guild.get_role(ow['id']) or guild.get_member(ow['id'])
+            for target_id, denied in overwrites.items():
+                target = guild.get_role(target_id) or guild.get_member(target_id)
                 if target:
-                    targets[target] = discord.PermissionOverwrite(**{p: True for p in ow.get('allow', [])}, **{p: False for p in ow.get('deny', [])})
+                    ov = discord.PermissionOverwrite()
+                    for p_name, _ in discord.Permissions.all():
+                        if hasattr(ov, p_name): setattr(ov, p_name, True)
+                    
+                    for p in denied:
+                        if hasattr(ov, p): setattr(ov, p, False)
+                    targets[target] = ov
         
         cat_obj = guild.get_channel(category) if category else None
         common = {"name": name, "overwrites": targets, "reason": reason, "category": cat_obj, "position": position}
 
-        if not id: # Create
-            if datatype == discord.ChannelType.text: channel = await guild.create_text_channel(**common, topic=topic, nsfw=nsfw, slowmode_delay=slowmode)
-            elif datatype == discord.ChannelType.voice: channel = await guild.create_voice_channel(**common, bitrate=bitrate, user_limit=userLimit)
-            elif datatype == discord.ChannelType.category: channel = await guild.create_category(name=name, overwrites=targets, reason=reason, position=position)
-            elif datatype == discord.ChannelType.news: channel = await guild.create_news_channel(**common, topic=topic, nsfw=nsfw)
-            elif datatype == discord.ChannelType.forum: channel = await guild.create_forum(**common, topic=topic, nsfw=nsfw)
-            elif datatype == discord.ChannelType.stage_voice: channel = await guild.create_stage_channel(**common, topic=topic)
+        if not id or isinstance(id, str): # Create
+            if type == discord.ChannelType.text: channel = await guild.create_text_channel(**common, topic=topic, nsfw=nsfw, slowmode_delay=slowmode)
+            elif type == discord.ChannelType.voice: channel = await guild.create_voice_channel(**common, bitrate=bitrate, user_limit=userLimit)
+            elif type == discord.ChannelType.category: channel = await guild.create_category(name=name, overwrites=targets, reason=reason, position=position)
+            elif type == discord.ChannelType.news: channel = await guild.create_news_channel(**common, topic=topic, nsfw=nsfw)
+            elif type == discord.ChannelType.forum: channel = await guild.create_forum(**common, topic=topic, nsfw=nsfw)
+            elif type == discord.ChannelType.stage_voice: channel = await guild.create_stage_channel(**common, topic=topic)
         else: # Modify
             channel = guild.get_channel(id)
             if channel:

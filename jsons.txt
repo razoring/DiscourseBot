@@ -1,0 +1,5 @@
+FOR TEXT CHANNEL CREATE
+{'comments': 'A new text channel named general will be created. No specific permissions will be configured for it.', 'actions': [{'action': 'channel', 'id': None, 'name': 'general', 'type': 'text', 'topic': 'General discussion.', 'nsfw': False, 'category': 1492042343661047860, 'position': None, 'bitrate': 64000, 'userLimit': 0, 'slowmode': 0, 'overwrites': [], 'reason': 'Automated Action by Stagehand.'}]}
+
+FOR ROLE CREATE
+{'comments': 'A new role named Gamer will be created for the server.', 'actions': [{'action': 'role', 'id': None, 'name': 'Gamer', 'colour': '#00FF00', 'mentionable': True, 'hoist': False, 'position': 1, 'deny': [''], 'reason': 'Created the Gamer role.'}]}
