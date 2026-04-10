@@ -130,12 +130,12 @@ class Robot(commands.Cog):
                 for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): {','.join(role['permissions'])}\n"
             else: updated += f"Error fetching roles: {roles}\n"
             
-            #updated += "\n## EXISTING CATEGORIES\n"
+            updated += "\n## EXISTING CATEGORIES\n"
             channels = await self.listChannels(guild)
             if isinstance(channels, list):
                 for ch in channels:
                     if ch['type'] == "category":
-                        #updated += f"- Name: '{ch['name']}' (ID: {ch['id']})\n"
+                        updated += f"- Name: '{ch['name']}' (ID: {ch['id']})\n"
                         pass
                 
                 updated += "\n## EXISTING CHANNELS\n"
