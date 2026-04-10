@@ -3,7 +3,7 @@ import json
 import asyncio
 import traceback
 import os
-from typing import Optional,get_args,get_origin,Union
+from typing import Optional,get_args, Literal
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -33,19 +33,22 @@ class Robot(commands.Cog):
             replied = msg.reference.resolved
             if replied.author == self.bot.user:
                 context = await self.getContext(msg)
-                print(context)
                 async with msg.channel.typing():
-                    reply: ChatResponse = await AsyncClient().chat(model="gemma4:e2b",messages=context,think=True)
-                    await msg.reply(reply.message.content)
+                    # Request with JSON schema to enforce the ImplementationPlan structure
+                    reply: ChatResponse = await AsyncClient().chat(model="gemma4:e2b",messages=context,think=True,format=ImplementationPlan.model_json_schema())
+                    parts = await self.processResponse(msg.guild, reply.message.content)
+                    
+                    for i, text in enumerate(parts):
+                        if i == 0: await msg.reply(text)
+                        else: await msg.channel.send(text)
 
     @app_commands.command(name="plan", description="Instruct Stagehand to create an implementation plan")
     @app_commands.describe(instructions="Instructions to send")
     async def plan(self,interaction: discord.Interaction, instructions: str):
         await interaction.response.defer()
-        content = await self.getTools(interaction.guild)
-        reply: ChatResponse = await AsyncClient().chat( model="gemma4:e2b",messages=[{"role":"assistant","content":content},{"role": "user","content": instructions}],think=True,format=ImplementationPlan.model_json_schema())
-        response = json.loads(reply.message.content)
-        messages = await self.formatPlan(interaction.guild,response)
+        content = await self.getPlan(interaction.guild)
+        reply: ChatResponse = await AsyncClient().chat( model="gemma4:e2b",messages=[{"role":"system","content":content},{"role": "user","content": instructions}],think=True,format=ImplementationPlan.model_json_schema())
+        messages = await self.processResponse(interaction.guild, reply.message.content)
         for i,msgText in enumerate(messages):
             if i == 0: await interaction.followup.send(msgText)
             else: await interaction.channel.send(msgText)
@@ -67,7 +70,7 @@ class Robot(commands.Cog):
     def ErrorHandler(func):
         async def wrapper(*args,**kwargs):
             try:
-                if inspect.iscoroutinefunction()(func): return await func(*args,**kwargs)
+                if inspect.iscoroutinefunction(func): return await func(*args,**kwargs)
                 return func(*args,**kwargs)
             except discord.Forbidden as e: return f"403: Forbidden\nBot does not have permissions: {e}"
             except discord.HTTPException as e: return f"409: Bad Request\nBot failed to perform action: {e}"
@@ -75,6 +78,21 @@ class Robot(commands.Cog):
                 traceback.print_exc()
                 return f"500: Internal Server Error\nUnexpected failure {e}"
         return wrapper
+
+    def resolveId(self, guild: discord.Guild, ref: int|str|None, datatype: Literal["role", "channel"]):
+        if not ref or isinstance(ref, int): return ref
+        if isinstance(ref, str) and ref.isdigit(): return int(ref)
+        
+        # Resolve by name
+        ref_low = ref.lower().lstrip("@#")
+        if datatype == "role":
+            if ref_low == "everyone": return guild.default_role.id
+            role = discord.utils.get(guild.roles, name=ref) or discord.utils.find(lambda r: r.name.lower() == ref_low, guild.roles)
+            if role: return role.id
+        else: # channel
+            channel = discord.utils.get(guild.channels, name=ref) or discord.utils.find(lambda c: c.name.lower() == ref_low, guild.channels)
+            if channel: return channel.id
+        return ref
 
     async def getContext(self, msg: discord.Message):
         content = await self.getTools(msg.guild)
@@ -91,7 +109,7 @@ class Robot(commands.Cog):
         messages.reverse()
         return messages
 
-    async def getTools(self, guild: discord.Guild = None):
+    async def getPlan(self, guild: discord.Guild = None):
         updated = self.soul+"\n\n## TOOLS\n"
         
         tools = ImplementationPlan.model_fields['actions']
@@ -108,15 +126,26 @@ class Robot(commands.Cog):
         if guild:
             updated += "\n## EXISTING ROLES\n"
             roles = await self.listRoles(guild)
-            for role in roles: updated += f"- {role['name']} (ID: {role['id']}): {','.join(role['permissions'])}\n"
+            if isinstance(roles, list):
+                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): {','.join(role['permissions'])}\n"
+            else: updated += f"Error fetching roles: {roles}\n"
             
-            updated += "\n## EXISTING CHANNELS\n"
+            #updated += "\n## EXISTING CATEGORIES\n"
             channels = await self.listChannels(guild)
-            for ch in channels:
-                p_text = ""
-                for ow in ch['overwrites']:
-                    p_text += f"{ow['target']}({ow['type']}): +{','.join(ow['allow'])}, -{','.join(ow['deny'])} | "
-                updated += f"- {ch['name']} (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
+            if isinstance(channels, list):
+                for ch in channels:
+                    if ch['type'] == "category":
+                        #updated += f"- Name: '{ch['name']}' (ID: {ch['id']})\n"
+                        pass
+                
+                updated += "\n## EXISTING CHANNELS\n"
+                for ch in channels:
+                    if ch['type'] != "category":
+                        p_text = ""
+                        for ow in ch['overwrites']:
+                            p_text += f"{ow['target']}({ow['type']}): +{','.join(ow['allow'])}, -{','.join(ow['deny'])} | "
+                        updated += f"- Name: '{ch['name']}' (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
+            else: updated += f"Error fetching channels: {channels}\n"
         
         updated += "\n## USAGE GUIDELINES\n"
         updated += "1. 'name' must be a human-readable ROLE or CHANNEL name (e.g.,'Mod','Lounge').\n"
@@ -125,6 +154,49 @@ class Robot(commands.Cog):
         
         print(updated)
         return updated
+
+    async def processResponse(self, guild: discord.Guild, content: str):
+        try:
+            # Extract JSON if present within conversational text
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end != -1:
+                json_part = content[start:end]
+                data = json.loads(json_part)
+                # Check if it's a valid plan
+                if "actions" in data or "comments" in data:
+                    # Pre-resolve string IDs before Pydantic validation
+                    for act in data.get("actions", []):
+                        dtype = "role" if act.get("action") == "role" else "channel"
+                        if act.get("action") == "delete": dtype = act.get("type", "role")
+                        
+                        if "id" in act: act["id"] = self.resolveId(guild, act["id"], dtype)
+                        if "category" in act: act["category"] = self.resolveId(guild, act["category"], "channel")
+                        if "overwrites" in act:
+                            for ow in act["overwrites"]:
+                                if "id" in ow: ow["id"] = self.resolveId(guild, ow["id"], "role")
+
+                    plan = ImplementationPlan(**data)
+                    response = plan.model_dump()
+                    
+                    seen = set()
+                    unique = []
+                    for act in response.get("actions", []):
+                        act_id = act.get("id")
+                        act_type = act.get("action")
+                        key = (act_id, act_type)
+                        if act_id and key in seen: continue
+                        if act_id: seen.add(key)
+                        unique.append(act)
+                    response["actions"] = unique
+                    print(response)
+                    return await self.formatPlan(guild, response)
+            
+            # If not JSON or not a plan, treat as text and chunk it
+            return [content[i:i+1900] for i in range(0, len(content), 1900)]
+        except:
+            # Fallback to text chunking
+            return [content[i:i+1900] for i in range(0, len(content), 1900)]
 
     async def formatPlan(self, guild:discord.Guild,response:dict): # done by antigravity
         commentsText = response.get("comments","")
@@ -149,7 +221,7 @@ class Robot(commands.Cog):
                     channel = guild.get_channel(itemId)
                     name = channel.name if channel else f"Unknown ({itemId})"
                     toolDiff.append(f"--​- '#{name}'")
-            elif actionType == "role" or "permissions" in data:
+            elif actionType == "role" or any(k in data for k in ["permissions", "colour", "hoist", "mentionable"]):
                 itemId = data.get("id")
                 itemName = data.get("name","New Role")
                 newPerms = data.get("permissions",[])
@@ -166,7 +238,7 @@ class Robot(commands.Cog):
                 else: # create Role
                     toolDiff.append(f"+​++ '@{itemName}'")
                     for p in newPerms: toolDiff.append(f"+​++ {p}")
-            elif actionType == "channel" or "type" in data:
+            elif actionType == "channel" or any(k in data for k in ["topic", "nsfw", "overwrites", "userLimit"]):
                 itemId = data.get("id")
                 itemName = data.get("name","New Channel")
                 newOverwrites = data.get("overwrites", [])
