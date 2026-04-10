@@ -218,6 +218,12 @@ class Robot(commands.Cog):
             data = self._extractJson(content)
             if data and ("actions" in data or "comments" in data):
                 plan = ImplementationPlan(**data)
+                # Track newly created roles so channel overwrites can reference them
+                createdRoles = {}  # name (lowered) -> discord.Role
+                
+                # Sort: roles first, then channels — ensures roles exist before channel overwrites reference them
+                plan.actions.sort(key=lambda a: 0 if a.actionType == "role" else 1)
+                
                 for act in plan.actions:
                     # Resolve IDs/References
                     act.id = self.resolveId(guild, act.id, act.actionType)
@@ -233,7 +239,7 @@ class Robot(commands.Cog):
 
                     if act.actionType == "role":
                         if execute:
-                            await self.roleManagement(
+                            result = await self.roleManagement(
                                 guild=guild,
                                 name=act.name,
                                 id=act.id,
@@ -243,6 +249,10 @@ class Robot(commands.Cog):
                                 restrictions=act.roleRestrictions,
                                 reason=act.reason
                             )
+                            if isinstance(result, discord.Role):
+                                createdRoles[act.name.lower()] = result
+                            else:
+                                print(f"[roleManagement] Error: {result}")
                     elif act.actionType == "channel":
                         # Initialize overwrites list
                         overwrites = []
@@ -269,7 +279,7 @@ class Robot(commands.Cog):
                                 })
                         
                         if execute:
-                            await self.channelManagement(
+                            result = await self.channelManagement(
                                 guild=guild,
                                 datatype=self._parseChannelType(act.channelType),
                                 name=act.name,
@@ -278,8 +288,11 @@ class Robot(commands.Cog):
                                 category=act.category,
                                 overwrites=overwrites,
                                 reason=act.reason,
-                                position=act.position
+                                position=act.position,
+                                createdRoles=createdRoles
                             )
+                            if isinstance(result, str):
+                                print(f"[channelManagement] Error: {result}")
                 
                 resolvedData = plan.model_dump()
                 print(resolvedData)
@@ -415,14 +428,21 @@ class Robot(commands.Cog):
         return channels
     
     @errorHandler
-    async def channelManagement(self, guild: discord.Guild, datatype: discord.ChannelType, name: str, id: int=None, topic: str=None, nsfw: bool=False, category: int=None, bitrate: int=64000, userLimit: int=0, slowmode: int=0, overwrites: list=None, reason: str="Automated Action by Stagehand.", position: int=None):
+    async def channelManagement(self, guild: discord.Guild, datatype: discord.ChannelType, name: str, id: int=None, topic: str=None, nsfw: bool=False, category: int=None, bitrate: int=64000, userLimit: int=0, slowmode: int=0, overwrites: list=None, reason: str="Automated Action by Stagehand.", position: int=None, createdRoles: dict=None):
         channel = None
         targets = {}
+        createdRoles = createdRoles or {}
         if overwrites:
             valid_flags = [n for n, v in discord.Permissions.all()]
             for ow in overwrites:
                 t_id = self.resolveId(guild, ow['id'], "role")
-                target = guild.get_role(t_id) or guild.get_member(t_id) if isinstance(t_id, int) else None
+                target = None
+                if isinstance(t_id, int):
+                    target = guild.get_role(t_id) or guild.get_member(t_id)
+                
+                # Fallback: check recently created roles by name
+                if target is None and isinstance(ow['id'], str):
+                    target = createdRoles.get(ow['id'].lower().lstrip('@'))
                 
                 if target:
                     allowSide = [self._toSnakeCase(p) for p in ow.get('allow', []) if self._toSnakeCase(p) in valid_flags]
@@ -531,7 +551,9 @@ class Robot(commands.Cog):
                 valid_flags = [n for n, v in discord.Permissions.all()]
                 for ow in snapChan.overwrites:
                     t_id = self.resolveId(guild, ow['id'], "role")
-                    target = guild.get_role(t_id) or guild.get_member(t_id) if isinstance(t_id, int) else None
+                    target = None
+                    if isinstance(t_id, int):
+                        target = guild.get_role(t_id) or guild.get_member(t_id)
                     
                     if target:
                         allowSide = [p for p in ow['allow'] if p in valid_flags]
