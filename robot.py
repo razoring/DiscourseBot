@@ -96,7 +96,7 @@ class Robot(commands.Cog):
 
     async def getContext(self, msg: discord.Message):
         content = await self.getTools(msg.guild)
-        messages = [{"role":"assistant","content":content},{"role": ("system" if msg.author == self.bot.user else "user"),"content": msg.content}]
+        messages = [{"role":"system","content":content},{"role": ("assistant" if msg.author == self.bot.user else "user"),"content": msg.content}]
         current = msg
 
         while current.reference and current.reference.message_id:
@@ -104,7 +104,7 @@ class Robot(commands.Cog):
             else:
                 try: current = await msg.channel.fetch_message(current.reference.message_id)
                 except discord.NotFound: break
-            messages.append({"role": ("system" if current.author == self.bot.user else "user"),"content": current.content})
+            messages.append({"role": ("assistant" if current.author == self.bot.user else "user"),"content": current.content})
         
         messages.reverse()
         return messages
