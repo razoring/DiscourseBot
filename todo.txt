@@ -1,5 +1,7 @@
 NOW:
 - Dynamically choose when to append data: current roles, role permissions, current channels, channel permissions
+- Fixing deletion
+- Add discord specific context: explain verification systems, etc.
 
 FUTURE:
 - change server icon
