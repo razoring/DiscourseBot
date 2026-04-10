@@ -168,7 +168,6 @@ class Robot(commands.Cog):
                     # Pre-resolve string IDs before Pydantic validation
                     for act in data.get("actions", []):
                         dtype = "role" if act.get("action") == "role" else "channel"
-                        if act.get("action") == "delete": dtype = act.get("type", "role")
                         
                         if "id" in act: act["id"] = self.resolveId(guild, act["id"], dtype)
                         if "category" in act: act["category"] = self.resolveId(guild, act["category"], "channel")

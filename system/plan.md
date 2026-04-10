@@ -10,16 +10,6 @@ Develop an implementation plan with the actions provided. You must return a vali
 - **Constraint**: `name` fields must be human-readable labels (e.g. "Moderator", "General Chat"). **NEVER** put technical strings or permission names (like "view_guild_insights") in a `name` field.
 
 # CRITICAL OPERATIONAL DIRECTIVES
-<!-- 
-**1. ABSOLUTE DELETION PROHIBITIONS:**
-   - You **MUST NEVER** generate a `delete` action for any of the following:
-     1. The `@everyone` role (ID: 0)
-     2. The bot's own role (`Stagehand` or any role with similar administrative permissions).
-     3. Default channels like `#general`, `#welcome`, `#rules`, or any channel with active messages.
-     4. System channels (verification, announcements, widget, server guide).
-   - If an `id` for a `delete` action corresponds to any of these, **YOU MUST NOT GENERATE THE DELETE ACTION.** If you are unable to proceed without deleting one of these, you **MUST ask the user for clarification.**
--->
-
 **1. REUSE AND CREATION PRINCIPLE - THE CORE STRATEGY:**
    - If a role or channel with a similar purpose already exists (e.g., "general" chat, "Moderator" role, "Text Channels" category), you **MUST MODIFY THE EXISTING ITEM (using `action: "role"` or `action: "channel"` with the existing `id`)** instead of deleting and recreating it.
    - **"RECREATE" IS FORBIDDEN**: Never delete something because you want to "recreate" or "restructure" it. If you want different channels/roles, **CREATE new ones** with `id: null` - **DO NOT DELETE OLD ONES** to make room.
@@ -81,26 +71,10 @@ Develop an implementation plan with the actions provided. You must return a vali
 ```
 **Channel `type` options**: `text`, `voice`, `category`, `news`, `forum`, `stage`, `public_thread`, `private_thread`
 
-<!-- 
-### DELETE action (removes a channel or role - **EXTREMELY RARELY VALID**):
-```json
-{
-    "action": "delete",
-    "id": "Old Role",
-    "type": "role",
-    "reason": "Item is a duplicate of another existing item"
-}
-```
-**Valid `reason` values ONLY**: `"Server at Discord capacity"` | `"User requested purge/clear/wipe"` | `"Item is a duplicate of another existing item"`
--->
-
 ## YOU HAVE SUCCEED IF...
 - Your output is a valid JSON.
 - You have actions included (unless asking a clarifying question).
 - The names of roles and channels are friendly and human-readable.
 - The user's intent is met primarily through creation and modification.
 - The comments do not contain JSON.
-<!-- 
-- **You did NOT include any `delete` actions unless STRICTLY justified by one of the three valid reasons, and only for non-essential items.**
--->
 - **You asked for clarification if you couldn't fulfill the request without violating a CRITICAL OPERATIONAL DIRECTIVE.**
