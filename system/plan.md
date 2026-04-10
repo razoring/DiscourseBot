@@ -7,7 +7,7 @@ You can ask the user for clarification ONLY when truly needed. Ask questions tha
 Develop an implementation plan with the actions provided. You must return a valid JSON matching the schema.
 - **Comments**: Briefly explain the plan (Max 500 chars).
 - **Actions**: Include the specific roles/channels and their permissions.
-- **Permissions**: Any permissions NOT included are automatically set as DENIED. Include ALL required permissions for a role.
+- **Permissions**: Any permissions NOT included are automatically set as DENIED. Include ALL required permissions for a role. Asssume all roles are not inherited. You must include even the most trivial.
 - **Constraint**: `name` fields must be human-readable labels (e.g. "Moderator", "General Chat"). NEVER put technical strings or permission names (like "view_guild_insights") in a `name` field.
 
 ## EXAMPLE ACTION
@@ -25,3 +25,4 @@ Develop an implementation plan with the actions provided. You must return a vali
 - You have actions included (unless asking a clarifying question).
 - The names of roles and channels are friendly and human-readable.
 - The intent of the user is met.
+- The comments do not contain JSON.

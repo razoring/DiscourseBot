@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from models import ImplementationPlan
 
 class Robot(commands.Cog):
-    def __init__(self,bot):
+    def __init__(self, bot):
         self.bot = bot
         self.soul = ""
         
@@ -23,10 +23,10 @@ class Robot(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        await AsyncClient().chat( model="gemma4:e2b",messages=[{"role": "user","content": "Hello world!"}],think=False) # cold-star LLM
+        await AsyncClient().chat(model="gemma4:e2b",messages=[{"role": "user","content": "Hello world!"}],think=False) # cold-star LLM
 
     @commands.Cog.listener()
-    async def on_message(self,msg: discord.Message):
+    async def on_message(self, msg: discord.Message):
         if not self.bot.is_ready(): return
         if msg.author == self.bot.user: return
         if msg.reference and isinstance(msg.reference.resolved,discord.Message):
@@ -38,9 +38,9 @@ class Robot(commands.Cog):
                     reply: ChatResponse = await AsyncClient().chat(model="gemma4:e2b",messages=context,think=True)
                     await msg.reply(reply.message.content)
 
-    @app_commands.command(name="plan",description="Instruct Stagehand to create an implementation plan")
+    @app_commands.command(name="plan", description="Instruct Stagehand to create an implementation plan")
     @app_commands.describe(instructions="Instructions to send")
-    async def plan(self,interaction: discord.Interaction,instructions: str):
+    async def plan(self,interaction: discord.Interaction, instructions: str):
         await interaction.response.defer()
         content = await self.getTools(interaction.guild)
         reply: ChatResponse = await AsyncClient().chat( model="gemma4:e2b",messages=[{"role":"assistant","content":content},{"role": "user","content": instructions}],think=True,format=ImplementationPlan.model_json_schema())
@@ -76,7 +76,7 @@ class Robot(commands.Cog):
                 return f"500: Internal Server Error\nUnexpected failure {e}"
         return wrapper
 
-    async def getContext(self,msg: discord.Message):
+    async def getContext(self, msg: discord.Message):
         content = await self.getTools(msg.guild)
         messages = [{"role":"assistant","content":content},{"role": ("system" if msg.author == self.bot.user else "user"),"content": msg.content}]
         current = msg
@@ -91,7 +91,7 @@ class Robot(commands.Cog):
         messages.reverse()
         return messages
 
-    async def getTools(self,guild: discord.Guild = None):
+    async def getTools(self, guild: discord.Guild = None):
         updated = self.soul+"\n\n## TOOLS\n"
         
         tools = ImplementationPlan.model_fields['actions']
@@ -103,12 +103,20 @@ class Robot(commands.Cog):
             for field_name,field_info in tool.model_fields.items(): updated += f"\t- {field_name}: {field_info.description}\n"
         
         updated += "\n## ROLE PERMISSIONS\n"
-        for name,value in iter(discord.Permissions.all()):  updated += f"- {name}:True/False\n"
+        for name, value in iter(discord.Permissions.all()):  updated += f"- {name}:True/False\n"
 
         if guild:
             updated += "\n## EXISTING ROLES\n"
             roles = await self.listRoles(guild)
             for role in roles: updated += f"- {role['name']} (ID: {role['id']}): {','.join(role['permissions'])}\n"
+            
+            updated += "\n## EXISTING CHANNELS\n"
+            channels = await self.listChannels(guild)
+            for ch in channels:
+                p_text = ""
+                for ow in ch['overwrites']:
+                    p_text += f"{ow['target']}({ow['type']}): +{','.join(ow['allow'])}, -{','.join(ow['deny'])} | "
+                updated += f"- {ch['name']} (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
         
         updated += "\n## USAGE GUIDELINES\n"
         updated += "1. 'name' must be a human-readable ROLE or CHANNEL name (e.g.,'Mod','Lounge').\n"
@@ -118,7 +126,7 @@ class Robot(commands.Cog):
         print(updated)
         return updated
 
-    async def formatPlan(self,guild: discord.Guild,response: dict):
+    async def formatPlan(self, guild:discord.Guild,response:dict): # done by antigravity
         commentsText = response.get("comments","")
         actionsList = response.get("actions",[])
         diffChunks = []
@@ -138,7 +146,7 @@ class Robot(commands.Cog):
                 else: # channel
                     channel = guild.get_channel(itemId)
                     name = channel.name if channel else f"Unknown ({itemId})"
-                    toolDiff.extend(["---",f"- '#{name}'"])
+                    toolDiff.extend(["---",f"- '󠁐#{name}'"])
             elif "permissions" in data or action.get("name") == "RolePermissions":
                 itemId = data.get("id")
                 itemName = data.get("name","New Role")
@@ -163,10 +171,21 @@ class Robot(commands.Cog):
                         for p in newPerms: toolDiff.append(f"+ {p}")
             elif "type" in data or action.get("name") == "ChannelManagement":
                 itemId = data.get("id")
-                itemName = data.get("name","New Channel")
+                itemName = data.get("name", "New Channel")
+                newOverwrites = data.get("overwrites", [])
                 
                 toolDiff.append("---")
                 toolDiff.append(f"+ '#{itemName}'")
+                
+                if newOverwrites:
+                    toolDiff.append("Permissions:")
+                    for ow in newOverwrites:
+                        targetId = ow.get("id")
+                        target = guild.get_role(targetId) if guild else None
+                        targetName = target.name if target else f"Unknown ({targetId})"
+                        prefix = "＠" if not target or isinstance(target, discord.Role) else ""
+                        for p in ow.get('allow', []): toolDiff.append(f"+ {prefix}{targetName}: {p}")
+                        for p in ow.get('deny', []): toolDiff.append(f"- {prefix}{targetName}: {p}")
             
             # check if adding this tool exceeds chunk limit (1900 to stay safe)
             potentialLength = sum(len(line)+1 for line in currentDiff)+sum(len(line)+1 for line in toolDiff)+20
@@ -189,39 +208,92 @@ class Robot(commands.Cog):
     
     ## BOT TOOLS
     @ErrorHandler
-    async def listRoles(self,guild:discord.Guild):
+    async def listRoles(self, guild:discord.Guild):
         roles = []
         if not guild.roles: return []
         for role in guild.roles:
             perms = [name for name,value in role.permissions if value]
             roles.append({
-                "name": role.name,
-                "id": role.id,
-                "position": role.position,
-                "permissions": perms
+                "name":role.name,
+                "id":role.id,
+                "position":role.position,
+                "permissions":perms
             })
         roles.sort(key=lambda r: r["position"],reverse=True)
         return roles
     
     @ErrorHandler
-    async def rolePermissions(self,guild:discord.Guild,id:int):
-        role = guild.get_role(id)
-        return role.permissions
-    
-    @ErrorHandler
-    async def roleModify(self,guild:discord.Guild,reason:str,name:str,id:int,colour:discord.Colour=None,hoist:bool=False,mentionable:bool=False,**permissions:discord.Permissions):
+    async def roleManagement(self, guild:discord.Guild, reason:str, name:str, id:int, colour:discord.Colour=None, hoist:bool=False, mentionable:bool=False, position=0,**permissions:discord.Permissions):
         permissions = permissions if permissions != None else discord.Permissions.none()
         colour = colour if colour != None else discord.Color.default()
-        args = [name,permissions,colour,hoist,mentionable,reason]
+        args = [name,permissions,colour,hoist,mentionable,reason,position]
         if not id: role = await guild.create_role(*args)
         else: role = await guild.get_role(id).edit(*args) # if id exist,then modify instead of create
         return role
         
     @ErrorHandler
-    async def delete(self,guild:discord.Guild,id:int,datatype:discord.Role|discord.ChannelType,reason:str):
+    async def delete(self, guild:discord.Guild, id:int, datatype:discord.Role|discord.ChannelType, reason:str): # delete for channels/roles
         if isinstance(datatype,discord.Role): item = guild.get_role(id)
         elif isinstance(datatype,discord.ChannelType): item = guild.get_channel(id)
         await item.delete(reason=reason)
+
+    @ErrorHandler
+    async def listChannels(self, guild:discord.Guild):
+        channels = []
+        for channel in guild.channels:
+            overwrites = []
+            for target, overwrite in channel.overwrites.items():
+                allow = [n for n, v in overwrite if v is True]
+                deny = [n for n, v in overwrite if v is False]
+                target_name = target.name if hasattr(target, "name") else str(target)
+                overwrites.append({
+                    "target": target_name,
+                    "id": target.id,
+                    "type": "role" if isinstance(target, discord.Role) else "member",
+                    "allow": allow,
+                    "deny": deny
+                })
+            channels.append({
+                "name":channel.name,
+                "id":channel.id,
+                "type": str(channel.type).replace("ChannelType.",""),
+                "category": channel.category.name if channel.category else "None",
+                "overwrites": overwrites
+            })
+        channels.sort(key=lambda c: (c['category'], c['name']))
+        return channels
+    
+    @ErrorHandler
+    async def channelManagement(self, guild:discord.Guild, datatype:discord.ChannelType, id:int, name:str, topic:str=None, nsfw:bool=False, category:int=None, bitrate:int=64000, userLimit:int=0, slowmode:int=0, overwrites:list=None, reason:str=None):
+        channel = None
+        target_overwrites = {}
+        if overwrites:
+            for ow in overwrites:
+                target = guild.get_role(ow['id']) or guild.get_member(ow['id'])
+                if target:
+                    target_overwrites[target] = discord.PermissionOverwrite(**{p: True for p in ow['allow']}, **{p: False for p in ow['deny']})
+        
+        category_obj = guild.get_channel(category) if category else None
+        common_kwargs = {"name": name, "overwrites": target_overwrites, "reason": reason, "category": category_obj}
+
+        if not id:
+            if datatype == discord.ChannelType.text: channel = await guild.create_text_channel(**common_kwargs, topic=topic, nsfw=nsfw, slowmode_delay=slowmode)
+            elif datatype == discord.ChannelType.voice: channel = await guild.create_voice_channel(**common_kwargs, bitrate=bitrate, user_limit=userLimit)
+            elif datatype == discord.ChannelType.category: channel = await guild.create_category(name=name, overwrites=target_overwrites, reason=reason)
+            elif datatype == discord.ChannelType.news: channel = await guild.create_news_channel(**common_kwargs, topic=topic, nsfw=nsfw)
+            elif datatype == discord.ChannelType.forum: channel = await guild.create_forum_channel(**common_kwargs, topic=topic, nsfw=nsfw)
+            elif datatype == discord.ChannelType.stage_voice: channel = await guild.create_stage_channel(**common_kwargs, topic=topic)
+        else:
+            channel = guild.get_channel(id)
+            if channel:
+                edit_kwargs = {"name": name, "overwrites": target_overwrites, "reason": reason, "category": category_obj}
+                if hasattr(channel, "topic"): edit_kwargs["topic"] = topic
+                if hasattr(channel, "nsfw"): edit_kwargs["nsfw"] = nsfw
+                if hasattr(channel, "slowmode_delay"): edit_kwargs["slowmode_delay"] = slowmode
+                if hasattr(channel, "bitrate"): edit_kwargs["bitrate"] = bitrate
+                if hasattr(channel, "user_limit"): edit_kwargs["user_limit"] = userLimit
+                await channel.edit(**edit_kwargs)
+        return channel
 
 async def setup(bot):
     await bot.add_cog(Robot(bot))

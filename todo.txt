@@ -1,0 +1,14 @@
+NOW:
+- Dynamically choose when to append data: current roles, role permissions, current channels, channel permissions
+
+FUTURE:
+- Category access
+- Emoji access
+- Sticker access
+- Automod access
+- User access
+- External tools access
+- Pinned messages
+- Threads access
+- Server Boost Roles
+- Events access
