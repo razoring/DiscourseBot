@@ -131,71 +131,69 @@ class Robot(commands.Cog):
         actionsList = response.get("actions",[])
         diffChunks = []
         currentDiff = []
+        sep = "-" * 25
         
         for action in actionsList:
             data = action.get("arguments",action)
+            actionType = action.get("action", "").lower()
             
-            toolDiff = []
-            if "datatype" in data or action.get("name") == "Delete":
+            toolDiff = [sep]
+            if actionType == "delete" or ("type" in data and "name" not in data):
                 itemId = data.get("id")
-                dataType = data.get("datatype","role")
+                dataType = data.get("type","role")
                 if dataType == "role":
                     role = guild.get_role(itemId)
                     name = role.name if role else f"Unknown ({itemId})"
-                    toolDiff.extend(["---",f"- '＠{name}'"])
+                    toolDiff.append(f"--​- '@{name}'")
                 else: # channel
                     channel = guild.get_channel(itemId)
                     name = channel.name if channel else f"Unknown ({itemId})"
-                    toolDiff.extend(["---",f"- '󠁐#{name}'"])
-            elif "permissions" in data or action.get("name") == "RolePermissions":
+                    toolDiff.append(f"--​- '#{name}'")
+            elif actionType == "role" or "permissions" in data:
                 itemId = data.get("id")
                 itemName = data.get("name","New Role")
                 newPerms = data.get("permissions",[])
                 
-                toolDiff.append("---")
-                if itemId and itemId != "RolePermissions": # Modify Role
+                if itemId and not isinstance(itemId, str): # Modify Role
                     oldRole = guild.get_role(itemId)
-                    toolDiff.append(f"+ '＠{itemName}'")
+                    toolDiff.append(f"*** '@{itemName}'")
                     if oldRole:
                         oldPerms = [n for n,v in oldRole.permissions if v]
                         added = [p for p in newPerms if p not in oldPerms]
                         removed = [p for p in oldPerms if p not in newPerms]
-                        if added or removed:
-                            toolDiff.append("Permissions:")
-                            for p in added: toolDiff.append(f"+ {p}")
-                            for p in removed: toolDiff.append(f"- {p}")
+                        for p in added: toolDiff.append(f"+​++ {p}")
+                        for p in removed: toolDiff.append(f"--​- {p}")
                 else: # create Role
-                    toolDiff.append(f"+ '＠{itemName}'")
-                    if newPerms:
-                        toolDiff.append("Permissions:")
-                        for p in newPerms: toolDiff.append(f"+ {p}")
-            elif "type" in data or action.get("name") == "ChannelManagement":
+                    toolDiff.append(f"+​++ '@{itemName}'")
+                    for p in newPerms: toolDiff.append(f"+​++ {p}")
+            elif actionType == "channel" or "type" in data:
                 itemId = data.get("id")
-                itemName = data.get("name", "New Channel")
+                itemName = data.get("name","New Channel")
                 newOverwrites = data.get("overwrites", [])
                 
-                toolDiff.append("---")
-                toolDiff.append(f"+ '#{itemName}'")
+                if itemId and not isinstance(itemId, str): # Modify
+                    toolDiff.append(f"*** '#{itemName}'")
+                else: # Create
+                    toolDiff.append(f"+​++ '#{itemName}'")
                 
-                if newOverwrites:
-                    toolDiff.append("Permissions:")
-                    for ow in newOverwrites:
-                        targetId = ow.get("id")
-                        target = guild.get_role(targetId) if guild else None
-                        targetName = target.name if target else f"Unknown ({targetId})"
-                        prefix = "＠" if not target or isinstance(target, discord.Role) else ""
-                        for p in ow.get('allow', []): toolDiff.append(f"+ {prefix}{targetName}: {p}")
-                        for p in ow.get('deny', []): toolDiff.append(f"- {prefix}{targetName}: {p}")
+                for ow in newOverwrites:
+                    targetId = ow.get("id")
+                    target = guild.get_role(targetId) if guild else None
+                    targetName = target.name if target else f"Unknown ({targetId})"
+                    prefix = "@" if not target or isinstance(target, discord.Role) else ""
+                    for p in ow.get('allow', []): toolDiff.append(f"+​++ {prefix}{targetName}: {p}")
+                    for p in ow.get('deny', []): toolDiff.append(f"--​- {prefix}{targetName}: {p}")
             
             # check if adding this tool exceeds chunk limit (1900 to stay safe)
-            potentialLength = sum(len(line)+1 for line in currentDiff)+sum(len(line)+1 for line in toolDiff)+20
+            potentialLength = sum(len(line)+1 for line in currentDiff)+sum(len(line)+1 for line in toolDiff)+len(sep)+20
             if potentialLength > 1900 and currentDiff:
-                diffChunks.append("```diff\n"+"\n".join(currentDiff)+"\n```")
+                diffChunks.append("```diff\n"+"\n".join(currentDiff)+"\n"+sep+"\n```")
                 currentDiff = toolDiff
             else:
                 currentDiff.extend(toolDiff)
-
+        
         if currentDiff:
+            currentDiff.append(sep)
             diffChunks.append("```diff\n"+"\n".join(currentDiff)+"\n```")
 
         totalDiffLen = sum(len(chunk) for chunk in diffChunks)+(len(diffChunks)-1)*2
@@ -223,18 +221,32 @@ class Robot(commands.Cog):
         return roles
     
     @ErrorHandler
-    async def roleManagement(self, guild:discord.Guild, reason:str, name:str, id:int, colour:discord.Colour=None, hoist:bool=False, mentionable:bool=False, position=0,**permissions:discord.Permissions):
-        permissions = permissions if permissions != None else discord.Permissions.none()
-        colour = colour if colour != None else discord.Color.default()
-        args = [name,permissions,colour,hoist,mentionable,reason,position]
-        if not id: role = await guild.create_role(*args)
-        else: role = await guild.get_role(id).edit(*args) # if id exist,then modify instead of create
+    async def roleManagement(self, guild:discord.Guild, name:str, id:int=None, colour:str="#000000", hoist:bool=False, mentionable:bool=False, position:int=0, permissions:list=None, reason:str="Automated Action by Stagehand."):
+        permsObj = discord.Permissions(**{p: True for p in permissions}) if permissions else discord.Permissions.none()
+        colourHex = colour.replace("#", "")
+        colourObj = discord.Color(int(colourHex, 16)) if colourHex else discord.Color.default()
+        
+        args = {
+            "name": name,
+            "permissions": permsObj,
+            "colour": colourObj,
+            "hoist": hoist,
+            "mentionable": mentionable,
+            "reason": reason
+        }
+        
+        if not id:
+            role = await guild.create_role(**args)
+            if position > 0: await role.edit(position=position)
+        else:
+            role = guild.get_role(id)
+            if role: await role.edit(**args, position=position)
         return role
         
     @ErrorHandler
-    async def delete(self, guild:discord.Guild, id:int, datatype:discord.Role|discord.ChannelType, reason:str): # delete for channels/roles
-        if isinstance(datatype,discord.Role): item = guild.get_role(id)
-        elif isinstance(datatype,discord.ChannelType): item = guild.get_channel(id)
+    async def delete(self, guild:discord.Guild, id:int, type:discord.Role|discord.ChannelType, reason:str): # delete for channels/roles
+        if isinstance(type,discord.Role): item = guild.get_role(id)
+        elif isinstance(type,discord.ChannelType): item = guild.get_channel(id)
         await item.delete(reason=reason)
 
     @ErrorHandler
@@ -264,35 +276,31 @@ class Robot(commands.Cog):
         return channels
     
     @ErrorHandler
-    async def channelManagement(self, guild:discord.Guild, datatype:discord.ChannelType, id:int, name:str, topic:str=None, nsfw:bool=False, category:int=None, bitrate:int=64000, userLimit:int=0, slowmode:int=0, overwrites:list=None, reason:str=None):
+    async def channelManagement(self, guild:discord.Guild, datatype:discord.ChannelType, name:str, id:int=None, topic:str=None, nsfw:bool=False, category:int=None, bitrate:int=64000, userLimit:int=0, slowmode:int=0, overwrites:list=None, reason:str="Automated Action by Stagehand.", position:int=None):
         channel = None
-        target_overwrites = {}
+        targets = {}
         if overwrites:
             for ow in overwrites:
                 target = guild.get_role(ow['id']) or guild.get_member(ow['id'])
                 if target:
-                    target_overwrites[target] = discord.PermissionOverwrite(**{p: True for p in ow['allow']}, **{p: False for p in ow['deny']})
+                    targets[target] = discord.PermissionOverwrite(**{p: True for p in ow.get('allow', [])}, **{p: False for p in ow.get('deny', [])})
         
-        category_obj = guild.get_channel(category) if category else None
-        common_kwargs = {"name": name, "overwrites": target_overwrites, "reason": reason, "category": category_obj}
+        cat_obj = guild.get_channel(category) if category else None
+        common = {"name": name, "overwrites": targets, "reason": reason, "category": cat_obj, "position": position}
 
-        if not id:
-            if datatype == discord.ChannelType.text: channel = await guild.create_text_channel(**common_kwargs, topic=topic, nsfw=nsfw, slowmode_delay=slowmode)
-            elif datatype == discord.ChannelType.voice: channel = await guild.create_voice_channel(**common_kwargs, bitrate=bitrate, user_limit=userLimit)
-            elif datatype == discord.ChannelType.category: channel = await guild.create_category(name=name, overwrites=target_overwrites, reason=reason)
-            elif datatype == discord.ChannelType.news: channel = await guild.create_news_channel(**common_kwargs, topic=topic, nsfw=nsfw)
-            elif datatype == discord.ChannelType.forum: channel = await guild.create_forum_channel(**common_kwargs, topic=topic, nsfw=nsfw)
-            elif datatype == discord.ChannelType.stage_voice: channel = await guild.create_stage_channel(**common_kwargs, topic=topic)
-        else:
+        if not id: # Create
+            if datatype == discord.ChannelType.text: channel = await guild.create_text_channel(**common, topic=topic, nsfw=nsfw, slowmode_delay=slowmode)
+            elif datatype == discord.ChannelType.voice: channel = await guild.create_voice_channel(**common, bitrate=bitrate, user_limit=userLimit)
+            elif datatype == discord.ChannelType.category: channel = await guild.create_category(name=name, overwrites=targets, reason=reason, position=position)
+            elif datatype == discord.ChannelType.news: channel = await guild.create_news_channel(**common, topic=topic, nsfw=nsfw)
+            elif datatype == discord.ChannelType.forum: channel = await guild.create_forum(**common, topic=topic, nsfw=nsfw)
+            elif datatype == discord.ChannelType.stage_voice: channel = await guild.create_stage_channel(**common, topic=topic)
+        else: # Modify
             channel = guild.get_channel(id)
             if channel:
-                edit_kwargs = {"name": name, "overwrites": target_overwrites, "reason": reason, "category": category_obj}
-                if hasattr(channel, "topic"): edit_kwargs["topic"] = topic
-                if hasattr(channel, "nsfw"): edit_kwargs["nsfw"] = nsfw
-                if hasattr(channel, "slowmode_delay"): edit_kwargs["slowmode_delay"] = slowmode
-                if hasattr(channel, "bitrate"): edit_kwargs["bitrate"] = bitrate
-                if hasattr(channel, "user_limit"): edit_kwargs["user_limit"] = userLimit
-                await channel.edit(**edit_kwargs)
+                edit_map = {"name": name, "overwrites": targets, "reason": reason, "category": cat_obj, "position": position, "topic": topic, "nsfw": nsfw, "slowmode_delay": slowmode, "bitrate": bitrate, "user_limit": userLimit}
+                final_edit = {k: v for k, v in edit_map.items() if hasattr(channel, k) or k in ["name", "overwrites", "reason", "category", "position"]}
+                await channel.edit(**final_edit)
         return channel
 
 async def setup(bot):

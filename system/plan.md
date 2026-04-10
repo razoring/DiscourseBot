@@ -10,6 +10,9 @@ Develop an implementation plan with the actions provided. You must return a vali
 - **Permissions**: Any permissions NOT included are automatically set as DENIED. Include ALL required permissions for a role. Asssume all roles are not inherited. You must include even the most trivial.
 - **Constraint**: `name` fields must be human-readable labels (e.g. "Moderator", "General Chat"). NEVER put technical strings or permission names (like "view_guild_insights") in a `name` field.
 
+# REMINDER
+Channel names cannot contain spaces; you must use a dash to indicate spaces. 
+
 ## EXAMPLE ACTION
 {
     "action": "role",
