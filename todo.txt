@@ -1,5 +1,8 @@
 NOW:
 - Dynamically choose when to append data: current roles, role permissions, current channels, channel permissions
+- /undo command
+    - Restores from audit: soft load state; save from webhook
+    - Restore from file: hard load state (resets all actions to exact state)
 
 FUTURE:
 - change server icon

@@ -413,13 +413,13 @@ class Robot(commands.Cog):
 
 class ImplementationButtons(discord.ui.View):
     def __init__(self, cog:Robot, content:str, timeout = 300):
-        super().__init__(timeout=timeout)()
+        super().__init__(timeout=timeout)
         self.cog = cog
         self.content = content
 
     @discord.ui.button(label="Proceed", style=discord.ButtonStyle.blurple)
     async def proceed(self, interaction:discord.Interaction, button:discord.ui.Button):
-        parsed = ast.literal_eval(self.content)
+        parsed = ast.literal_eval(self.content.replace('\u200b', ''))
         parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
         for _,args in enumerate(parsed["actions"]):
             datatype = args.pop("action")
@@ -431,8 +431,8 @@ async def setup(bot):
 
     @bot.tree.context_menu(name="Finalize Implementation")
     async def implement(interaction: discord.Interaction, msg: discord.Message):
-        interaction.response.defer()
-        context = cog.getContext(msg)
+        await interaction.response.defer()
+        context = await cog.getContext(msg)
         reply: ChatResponse = await AsyncClient().chat(**cog.chat, messages=context)
         parts = await cog.processResponse(msg.guild, reply.message.content)
 
