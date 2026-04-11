@@ -69,16 +69,6 @@ class Robot(commands.Cog):
     async def sync(self, ctx):
         synced = await self.bot.tree.sync()
         await ctx.send(f"Synced {len(synced)} commands globally")
-
-    @commands.command(name="test")
-    @commands.is_owner()
-    async def test(self, ctx:discord.Interaction):
-        test = "{'comments': 'The plan will create the verification channel and the verified role. It will also adjust the @everyone role permissions to restrict access to the new channel and hide it from verified members.', 'actions': [{'action': 'role', 'id': 'Verification Channel', 'name': 'Verification Channel', 'colour': '#000000', 'mentionable': False, 'hoist': False, 'position': 0, 'deny': ['send_messages', 'read_messages', 'send_tts_messages', 'manage_messages', 'attach_files', 'send_messages_in_threads', 'manage_threads', 'create_public_threads', 'create_private_threads', 'use_embedded_activities', 'pin_messages', 'send_polls', 'use_external_apps', 'manage_webhooks', 'manage_expressions', 'manage_roles', 'manage_threads'], 'reason': 'Restricting access for the @everyone role in the Verification Channel.'}, {'action': 'role', 'id': 'Verified Role', 'name': 'Verified Role', 'colour': '#000000', 'mentionable': False, 'hoist': False, 'position': 0, 'deny': ['send_messages', 'read_messages', 'send_tts_messages', 'manage_messages', 'attach_files', 'send_messages_in_threads', 'manage_threads', 'create_public_threads', 'create_private_threads', 'use_embedded_activities', 'pin_messages', 'send_polls', 'use_external_apps', 'manage_webhooks', 'manage_expressions', 'manage_roles', 'manage_threads'], 'reason': 'Setting up the role to hide the channel from verified members.'}]}"
-        parsed = ast.literal_eval(test)
-        parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
-        for _,args in enumerate(parsed["actions"]):
-            datatype = args.pop("action")
-            await (self.channelManagement(guild=ctx.guild, **args) if datatype == "channel" else self.roleManagement(guild=ctx.guild, **args))
             
     ## PRELIMINARIES
     def ErrorHandler(func):
@@ -421,5 +411,31 @@ class Robot(commands.Cog):
                 await channel.edit(**final_edit)
         return channel
 
+class ImplementationButtons(discord.ui.View):
+    def __init__(self, cog:Robot, content:str, timeout = 300):
+        super().__init__(timeout=timeout)()
+        self.cog = cog
+        self.content = content
+
+    @discord.ui.button(label="Proceed", style=discord.ButtonStyle.blurple)
+    async def proceed(self, interaction:discord.Interaction, button:discord.ui.Button):
+        parsed = ast.literal_eval(self.content)
+        parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
+        for _,args in enumerate(parsed["actions"]):
+            datatype = args.pop("action")
+            await (self.channelManagement(guild=interaction.guild, **args) if datatype == "channel" else self.roleManagement(guild=interaction.guild, **args))
+    
 async def setup(bot):
-    await bot.add_cog(Robot(bot))
+    cog = Robot(bot)
+    await bot.add_cog(cog)
+
+    @bot.tree.context_menu(name="Finalize Implementation")
+    async def implement(interaction: discord.Interaction, msg: discord.Message):
+        interaction.response.defer()
+        context = cog.getContext(msg)
+        reply: ChatResponse = await AsyncClient().chat(**cog.chat, messages=context)
+        parts = await cog.processResponse(msg.guild, reply.message.content)
+
+        for i, text in enumerate(parts):
+            if i == 0: await interaction.followup.send(text, view=ImplementationButtons(cog=cog,content=text))
+            else: await msg.reply(text)
