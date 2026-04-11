@@ -73,13 +73,13 @@ class Robot(commands.Cog):
     @commands.command(name="test")
     @commands.is_owner()
     async def test(self, ctx:discord.Interaction):
-        test = "{'comments': 'A new text channel named general will be created. No specific permissions will be configured for it.', 'actions': [{'action': 'channel', 'id': None, 'name': 'general', 'type': 'text', 'topic': 'General discussion.', 'nsfw': False, 'category': 1492042343661047860, 'position': None, 'bitrate': 64000, 'userLimit': 0, 'slowmode': 0, 'overwrites': [], 'reason': 'Automated Action by Stagehand.'}]}"
+        test = "{'comments': 'The plan will create the verification channel and the verified role. It will also adjust the @everyone role permissions to restrict access to the new channel and hide it from verified members.', 'actions': [{'action': 'role', 'id': 'Verification Channel', 'name': 'Verification Channel', 'colour': '#000000', 'mentionable': False, 'hoist': False, 'position': 0, 'deny': ['send_messages', 'read_messages', 'send_tts_messages', 'manage_messages', 'attach_files', 'send_messages_in_threads', 'manage_threads', 'create_public_threads', 'create_private_threads', 'use_embedded_activities', 'pin_messages', 'send_polls', 'use_external_apps', 'manage_webhooks', 'manage_expressions', 'manage_roles', 'manage_threads'], 'reason': 'Restricting access for the @everyone role in the Verification Channel.'}, {'action': 'role', 'id': 'Verified Role', 'name': 'Verified Role', 'colour': '#000000', 'mentionable': False, 'hoist': False, 'position': 0, 'deny': ['send_messages', 'read_messages', 'send_tts_messages', 'manage_messages', 'attach_files', 'send_messages_in_threads', 'manage_threads', 'create_public_threads', 'create_private_threads', 'use_embedded_activities', 'pin_messages', 'send_polls', 'use_external_apps', 'manage_webhooks', 'manage_expressions', 'manage_roles', 'manage_threads'], 'reason': 'Setting up the role to hide the channel from verified members.'}]}"
         parsed = ast.literal_eval(test)
-        parsed["actions"][0].pop("action")
-        args = parsed["actions"][0]
-        await self.channelManagement(guild=ctx.guild, **args)
-        
-
+        parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
+        for _,args in enumerate(parsed["actions"]):
+            datatype = args.pop("action")
+            await (self.channelManagement(guild=ctx.guild, **args) if datatype == "channel" else self.roleManagement(guild=ctx.guild, **args))
+            
     ## PRELIMINARIES
     def ErrorHandler(func):
         async def wrapper(*args,**kwargs):
@@ -136,13 +136,13 @@ class Robot(commands.Cog):
         
         updated += "\n## ROLE PERMISSIONS\n"
         updated += "By default, ALL permissions (including Administrator) are ENABLED (True). You only need to list permissions you wish to DISABLE in the 'deny' field.\n"
-        for name, value in iter(discord.Permissions.all()):  updated += f"- {name}:True/False\n"
+        for name, value in iter(discord.Permissions.all()):  updated += f"- {name}\n"
 
         if guild:
             updated += "\n## EXISTING ROLES\n"
             roles = await self.listRoles(guild)
             if isinstance(roles, list):
-                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: all, Denied: {','.join(role['denied'])}\n"
+                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: {','.join(role['allowed'])}, Denied: {','.join(role['denied'])}\n"
             else: updated += f"Error fetching roles: {roles}\n"
             
             updated += "\n## EXISTING CATEGORIES\n"
@@ -291,18 +291,23 @@ class Robot(commands.Cog):
         if not guild.roles: return []
         for role in guild.roles:
             if role.name != "Stagehand":
+                allowed = [name for name,value in role.permissions if value]
                 denied = [name for name,value in role.permissions if not value]
                 roles.append({
                     "name":role.name,
                     "id":role.id,
                     "position":role.position,
+                    "allowed":allowed,
                     "denied":denied
                 })
         roles.sort(key=lambda r: r["position"],reverse=True)
         return roles
     
     @ErrorHandler
-    async def roleManagement(self, guild:discord.Guild, name:str, id:int=None, colour:str="#000000", hoist:bool=False, mentionable:bool=False, position:int=0, deny:list=None, reason:str="Automated Action by Stagehand."):
+    async def roleManagement(self, guild:discord.Guild, name:str, id:int|str|None=None, colour:str="#000000", hoist:bool=False, mentionable:bool=False, position:int=0, deny:list=None, reason:str="Automated Action by Stagehand."):
+        if not id and name.lower().lstrip("@") == "everyone": id = guild.default_role.id
+        id = self.resolveId(guild, id, "role")
+        
         permsObj = discord.Permissions.all()
         if deny:
             for p in deny:
@@ -319,12 +324,14 @@ class Robot(commands.Cog):
             "reason": reason
         }
         
-        if not id:
+        if not id or isinstance(id, str):
             role = await guild.create_role(**args)
             if position > 0: await role.edit(position=position)
         else:
             role = guild.get_role(id)
-            if role: await role.edit(**args, position=position)
+            if role:
+                if role.is_default(): await role.edit(permissions=permsObj, reason=reason)
+                else: await role.edit(**args, position=position)
         return role
         
     @ErrorHandler
