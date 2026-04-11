@@ -311,17 +311,6 @@ User asked: "Rename the Moderator role to Staff and make the announcements chann
 }
 ```
 IMPORTANT: When editing an existing item, the `id` field MUST be the exact name of the existing role or channel (as shown in EXISTING ROLES or EXISTING CHANNELS). NEVER use null for an edit. ALL fields must still be included even when only one field is changing.
----
-### EXAMPLE 7 — CLARIFICATION (NO ACTIONS)
-User asked: "What roles does this server have?"
-```json
-{
-    "comments": "I can see the current roles listed in the server context above. Let me know what you would like to add, modify, or remove and I will put together a plan for you.",
-    "actions": []
-}
-```
-IMPORTANT: Use an empty actions list ONLY when asking a clarifying question or confirming existing state. NEVER leave actions empty when the user has made a clear build request.
----
 
 ## YOU HAVE SUCCEED IF...
 - Your output is a valid JSON.
