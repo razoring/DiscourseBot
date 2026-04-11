@@ -69,7 +69,17 @@ class Robot(commands.Cog):
     async def sync(self, ctx):
         synced = await self.bot.tree.sync()
         await ctx.send(f"Synced {len(synced)} commands globally")
-            
+    
+    @commands.command(name="test")
+    @commands.is_owner()
+    async def test(self, ctx:discord.Interaction):
+        test = """{'comments': "The plan will hide the general channel from @everyone by denying them the ability to view and read messages. This will be done by setting overwrites on the 'general' channel for the '@everyone' role.", 'actions': [{'action': 'channel', 'id': None, 'name': 'general', 'type': 'text', 'topic': 'General discussion.', 'nsfw': False, 'category': 1492042343661047860, 'position': None, 'bitrate': 64000, 'userLimit': 0, 'slowmode': 0, 'overwrites': {1492042343115919493: ['view_channel', 'read_messages']}, 'reason': 'Hiding the general channel from @everyone as requested.'}]}"""
+        parsed = ast.literal_eval(test)
+        parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
+        for _,args in enumerate(parsed["actions"]):
+            datatype = args.pop("action")
+            await (self.channelManagement(guild=ctx.guild, **args) if datatype == "channel" else self.roleManagement(guild=ctx.guild, **args))
+
     ## PRELIMINARIES
     def ErrorHandler(func):
         async def wrapper(*args,**kwargs):
