@@ -17,7 +17,7 @@ from models import ImplementationPlan
 class Robot(commands.Cog):
     def __init__(self, bot):
         self.bot:discord.ClientUser = bot
-        self.model="gemma4:e4b"
+        self.model="gemma4:e2b"
         self.chat = {"model":self.model, "think": True, "format": ImplementationPlan.model_json_schema()}
         
         self.soul = ""
@@ -53,6 +53,7 @@ class Robot(commands.Cog):
         content = await self.getPlan(interaction.guild)
         reply: ChatResponse = await AsyncClient().chat(messages=[{"role":"system","content":content},{"role": "user","content":instructions}], **self.chat)
         messages = await self.processResponse(interaction.guild, reply.message.content)
+        print(reply.message.thinking, reply.message.content)
         for i,msgText in enumerate(messages):
             if i == 0: await interaction.followup.send(msgText)
             else: await interaction.followup.send(msgText)
