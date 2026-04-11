@@ -412,18 +412,21 @@ class Robot(commands.Cog):
         return channel
 
 class ImplementationButtons(discord.ui.View):
-    def __init__(self, cog:Robot, content:str, timeout = 300):
+    def __init__(self, cog:Robot, plan:dict, timeout = 300):
         super().__init__(timeout=timeout)
         self.cog = cog
-        self.content = content
+        self.plan = plan
 
     @discord.ui.button(label="Proceed", style=discord.ButtonStyle.blurple)
     async def proceed(self, interaction:discord.Interaction, button:discord.ui.Button):
-        parsed = ast.literal_eval(self.content.replace('\u200b', ''))
-        parsed["actions"] = sorted(parsed["actions"], key=lambda x: {"role": 0, "channel": 1}.get(x["action"], 99))
-        for _,args in enumerate(parsed["actions"]):
+        await interaction.response.defer()
+        actions = sorted(self.plan.get("actions", []), key=lambda x: {"role": 0, "channel": 1}.get(x.get("action", ""), 99))
+        for args in actions:
+            args = dict(args)  # avoid mutating the stored plan
             datatype = args.pop("action")
-            await (self.channelManagement(guild=interaction.guild, **args) if datatype == "channel" else self.roleManagement(guild=interaction.guild, **args))
+            if datatype == "channel": await self.cog.channelManagement(guild=interaction.guild, **args)
+            else: await self.cog.roleManagement(guild=interaction.guild, **args)
+        await interaction.followup.send("Implementation complete.", ephemeral=True)
     
 async def setup(bot):
     cog = Robot(bot)
@@ -434,8 +437,23 @@ async def setup(bot):
         await interaction.response.defer()
         context = await cog.getContext(msg)
         reply: ChatResponse = await AsyncClient().chat(**cog.chat, messages=context)
-        parts = await cog.processResponse(msg.guild, reply.message.content)
 
+        # Parse the raw JSON into a plan before formatting
+        raw = reply.message.content
+        plan = None
+        try:
+            start = raw.find('{')
+            end = raw.rfind('}') + 1
+            if start != -1 and end > start:
+                import json as _json
+                data = _json.loads(raw[start:end])
+                if "actions" in data or "comments" in data:
+                    from models import ImplementationPlan
+                    plan = ImplementationPlan(**data).model_dump()
+        except Exception: pass
+
+        parts = await cog.processResponse(msg.guild, raw)
         for i, text in enumerate(parts):
-            if i == 0: await interaction.followup.send(text, view=ImplementationButtons(cog=cog,content=text))
+            view = ImplementationButtons(cog=cog, plan=plan) if (i == 0 and plan) else None
+            if i == 0: await interaction.followup.send(text, view=view)
             else: await msg.reply(text)
