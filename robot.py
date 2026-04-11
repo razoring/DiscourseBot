@@ -134,15 +134,16 @@ class Robot(commands.Cog):
             updated += f"- {tool.__name__}:\n"
             for field_name,field_info in tool.model_fields.items(): updated += f"\t- {field_name}: {field_info.description}\n"
         
-        updated += "\n## ROLE PERMISSIONS\n"
-        updated += "By default, ALL permissions (including Administrator) are ENABLED (True). You only need to list permissions you wish to DISABLE in the 'deny' field.\n"
-        for name, value in iter(discord.Permissions.all()):  updated += f"- {name}\n"
+        """updated += "\n## ROLE PERMISSIONS\n"
+        updated += "By default, ALL permissions (including Administrator) are ENABLED (True). You only need to list permissions you wish to DISABLE in the 'deny' field.\nHere are the roles: "
+        for name, value in iter(discord.Permissions.all()): updated += f"{name}, "
+        updated += "\n"; updated.replace(", \n","")"""
 
         if guild:
             updated += "\n## EXISTING ROLES\n"
             roles = await self.listRoles(guild)
             if isinstance(roles, list):
-                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: {','.join(role['allowed'])}, Denied: {','.join(role['denied'])}\n"
+                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: {', '.join(role['allowed'])} | Denied: {', '.join(role['denied'])}\n"
             else: updated += f"Error fetching roles: {roles}\n"
             
             updated += "\n## EXISTING CATEGORIES\n"
