@@ -17,7 +17,7 @@ from models import ImplementationPlan
 class Robot(commands.Cog):
     def __init__(self, bot):
         self.bot:discord.ClientUser = bot
-        self.model="gemma4:e2b"
+        self.model="gemma4:e4b"
         self.chat = {"model":self.model, "think": True, "format": ImplementationPlan.model_json_schema()}
         
         self.soul = ""
