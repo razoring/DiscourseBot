@@ -1,4 +1,6 @@
 NOW:
+- Handle roles, channels, and categories
+- Category access (could be done implicitly when model "hallucinates" category)
 - Dynamically choose when to append data: current roles, role permissions, current channels, channel permissions
 - /undo command
     - Restores from audit: soft load state; save from webhook
@@ -6,7 +8,6 @@ NOW:
 
 FUTURE:
 - change server icon
-- Category access
 - Emoji access
 - Sticker access
 - Automod access
