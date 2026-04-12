@@ -12,22 +12,93 @@ from ollama import ChatResponse
 from ollama import AsyncClient
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from models import ImplementationPlan
 
 class Robot(commands.Cog):
     def __init__(self, bot):
         self.bot:discord.ClientUser = bot
         self.model="gemma4:e2b"
-        self.chat = {"model":self.model, "think": True, "format": ImplementationPlan.model_json_schema()}
         
-        self.soul = ""
-        with open("system/plan.md","r") as file:
-            self.soul = file.read()
-            file.close() # close buffer
+        with open("system/decision.md","r") as file:
+            self.decision_prompt = file.read()
+        with open("system/roles.md","r") as file:
+            self.roles_prompt = file.read()
+        with open("system/channels.md","r") as file:
+            self.channels_prompt = file.read()
 
     @commands.Cog.listener()
     async def on_ready(self):
         await AsyncClient().chat(model=self.model, messages=[{"role":"user","content":"Hello world!"}],think=False) # cold-start LLM
+
+    async def pipeline(self, msg_or_interaction: discord.Message | discord.Interaction, instructions: str = None, context_messages: list = None):
+        guild = msg_or_interaction.guild
+        
+        # 1. Ask Decision LLM
+        decision_messages = [{"role": "system", "content": self.decision_prompt}]
+        if context_messages: decision_messages.extend(context_messages)
+        if instructions: decision_messages.append({"role": "user", "content": instructions})
+            
+        from models import DecisionPlan, RoleImplementationPlan, ChannelImplementationPlan
+        
+        decision_reply = await AsyncClient().chat(model=self.model, messages=decision_messages, think=False, format=DecisionPlan.model_json_schema())
+        try:
+            decision = json.loads(decision_reply.message.content)
+            roles_needed = decision.get("rolesNeeded", False)
+            channels_needed = decision.get("channelsNeeded", False)
+        except:
+            roles_needed = True
+            channels_needed = True
+        
+        last_message = None
+        
+        # Helper to repeatedly thread replies
+        async def send_sequence(parts, reply_target):
+            first = None
+            for i, text in enumerate(parts):
+                if isinstance(msg_or_interaction, discord.Interaction) and reply_target is None and i == 0:
+                    first = await msg_or_interaction.followup.send(text, wait=True)
+                elif reply_target is not None and hasattr(reply_target, "reply"):
+                    first = await reply_target.reply(text)
+                elif isinstance(msg_or_interaction, discord.Message) and reply_target is None and i == 0:
+                    first = await msg_or_interaction.reply(text)
+                elif hasattr(msg_or_interaction, "channel"):
+                    first = await msg_or_interaction.channel.send(text)
+                else: 
+                    # fallback
+                    first = await msg_or_interaction.channel.send(text)
+                reply_target = first
+            return first
+
+        # 2. Roles
+        if roles_needed:
+            roles_context = await self.getPlan(guild, "role")
+            role_msgs = [{"role": "system", "content": roles_context}]
+            if context_messages: role_msgs.extend(context_messages)
+            if instructions: role_msgs.append({"role": "user", "content": instructions})
+            
+            role_reply = await AsyncClient().chat(model=self.model, messages=role_msgs, think=True, format=RoleImplementationPlan.model_json_schema())
+            role_parts = await self.processResponse(guild, role_reply.message.content, model=RoleImplementationPlan)
+            last_message = await send_sequence(role_parts, None)
+            
+        # 3. Channels
+        if channels_needed:
+            channels_context = await self.getPlan(guild, "channel")
+            channel_msgs = [{"role":"system", "content": channels_context}]
+            if context_messages: channel_msgs.extend(context_messages)
+            if instructions: channel_msgs.append({"role":"user", "content": instructions})
+            
+            channel_reply = await AsyncClient().chat(model=self.model, messages=channel_msgs, think=True, format=ChannelImplementationPlan.model_json_schema())
+            channel_parts = await self.processResponse(guild, channel_reply.message.content, model=ChannelImplementationPlan)
+            
+            reply_to = last_message
+            if reply_to is None and isinstance(msg_or_interaction, discord.Interaction):
+                # We haven't sent anything yet, so we should respond to the interaction
+                # If we pass None, our send_sequence will use followup.send(..., wait=True) which is correct
+                reply_to = None
+            
+            await send_sequence(channel_parts, reply_to)
+
+        if not roles_needed and not channels_needed:
+            await send_sequence(["The Decision LLM determined no roles or channels needed to be created."], None)
 
     @commands.Cog.listener()
     async def on_message(self, msg: discord.Message):
@@ -38,25 +109,13 @@ class Robot(commands.Cog):
             if replied.author == self.bot.user:
                 context = await self.getContext(msg)
                 async with msg.channel.typing():
-                    # Request with JSON schema to enforce the ImplementationPlan structure
-                    reply: ChatResponse = await AsyncClient().chat(**self.chat, messages=context)
-                    parts = await self.processResponse(msg.guild, reply.message.content)
-                    
-                    for i, text in enumerate(parts):
-                        if i == 0: await msg.reply(text)
-                        else: await msg.channel.send(text)
+                    await self.pipeline(msg, context_messages=context)
 
     @app_commands.command(name="plan", description="Instruct Stagehand to create an implementation plan")
     @app_commands.describe(instructions="Instructions to send")
     async def plan(self, interaction: discord.Interaction, instructions: str):
-        await interaction.response.defer()
-        content = await self.getPlan(interaction.guild)
-        reply: ChatResponse = await AsyncClient().chat(messages=[{"role":"system","content":content},{"role": "user","content":instructions}], **self.chat)
-        messages = await self.processResponse(interaction.guild, reply.message.content)
-        print(reply.message.thinking, reply.message.content)
-        for i,msgText in enumerate(messages):
-            if i == 0: await interaction.followup.send(msgText)
-            else: await interaction.followup.send(msgText)
+        await interaction.response.defer(thinking=True)
+        await self.pipeline(interaction, instructions=instructions)
 
     @commands.command(name="reload")
     @commands.is_owner()
@@ -110,8 +169,8 @@ class Robot(commands.Cog):
         return ref
 
     async def getContext(self, msg: discord.Message):
-        content = self.soul
-        messages = [{"role":"system","content":content},{"role": ("assistant" if msg.author == self.bot.user else "user"),"content": msg.content}]
+        # We don't prepend the soul to the context here anymore, since we dynamically select the system prompt.
+        messages = [{"role": ("assistant" if msg.author == self.bot.user else "user"),"content": msg.content}]
         current = msg
 
         while current.reference and current.reference.message_id:
@@ -124,10 +183,13 @@ class Robot(commands.Cog):
         messages.reverse()
         return messages
 
-    async def getPlan(self, guild: discord.Guild = None):
-        updated = self.soul+"\n\n## TOOLS\n"
+    async def getPlan(self, guild: discord.Guild, plan_type: Literal["role", "channel"]) -> str:
+        prompt = self.roles_prompt if plan_type == "role" else self.channels_prompt
+        updated = prompt + "\n\n## TOOLS\n"
         
-        tools = ImplementationPlan.model_fields['actions']
+        from models import RoleImplementationPlan, ChannelImplementationPlan
+        model = RoleImplementationPlan if plan_type == "role" else ChannelImplementationPlan
+        tools = model.model_fields['actions']
         types = get_args(tools.annotation)[0]
         classes = get_args(types) or [types]
 
@@ -135,39 +197,35 @@ class Robot(commands.Cog):
             updated += f"- {tool.__name__}:\n"
             for field_name,field_info in tool.model_fields.items(): updated += f"\t- {field_name}: {field_info.description}\n"
         
-        """updated += "\n## ROLE PERMISSIONS\n"
-        updated += "By default, ALL permissions (including Administrator) are ENABLED (True). You only need to list permissions you wish to DISABLE in the 'deny' field.\nHere are the roles: "
-        for name, value in iter(discord.Permissions.all()): updated += f"{name}, "
-        updated += "\n"; updated.replace(", \n","")"""
-
         if guild:
-            updated += "\n## EXISTING ROLES\n"
-            roles = await self.listRoles(guild)
-            if isinstance(roles, list):
-                for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: {', '.join(role['allowed'])} | Denied: {', '.join(role['denied'])}\n"
-            else: updated += f"Error fetching roles: {roles}\n"
+            if plan_type == "role":
+                updated += "\n## EXISTING ROLES\n"
+                roles = await self.listRoles(guild)
+                if isinstance(roles, list):
+                    for role in roles: updated += f"- Name: '{role['name']}' (ID: {role['id']}): Allowed: {', '.join(role['allowed'])} | Denied: {', '.join(role['denied'])}\n"
+                else: updated += f"Error fetching roles: {roles}\n"
             
-            updated += "\n## EXISTING CATEGORIES\n"
-            channels = await self.listChannels(guild)
-            if isinstance(channels, list):
-                for ch in channels:
-                    if ch['type'] == "category":
-                        updated += f"- Name: '{ch['name']}' (ID: {ch['id']})\n"
-                        pass
-                
-                updated += "\n## EXISTING CHANNELS\n"
-                for ch in channels:
-                    if ch['type'] != "category":
-                        p_text = ""
-                        for ow in ch['overwrites']:
-                            p_text += f"{ow['target']}({ow['type']}): -{','.join(ow['deny'])} | "
-                        updated += f"- Name: '{ch['name']}' (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
-            else: updated += f"Error fetching channels: {channels}\n"
+            if plan_type == "channel":
+                updated += "\n## EXISTING CATEGORIES\n"
+                channels = await self.listChannels(guild)
+                if isinstance(channels, list):
+                    for ch in channels:
+                        if ch['type'] == "category":
+                            updated += f"- Name: '{ch['name']}' (ID: {ch['id']})\n"
+                    
+                    updated += "\n## EXISTING CHANNELS\n"
+                    for ch in channels:
+                        if ch['type'] != "category":
+                            p_text = ""
+                            for ow in ch['overwrites']:
+                                p_text += f"{ow['target']}({ow['type']}): -{','.join(ow['deny'])} | "
+                            updated += f"- Name: '{ch['name']}' (Type: {ch['type']}, ID: {ch['id']}): {p_text}\n"
+                else: updated += f"Error fetching channels: {channels}\n"
         
         print(updated)
         return updated
 
-    async def processResponse(self, guild: discord.Guild, content: str):
+    async def processResponse(self, guild: discord.Guild, content: str, model=None):
         try:
             # Extract JSON if present within conversational text
             start = content.find('{')
@@ -190,8 +248,11 @@ class Robot(commands.Cog):
                                 new_ow[resolved] = deny_list
                             act["overwrites"] = new_ow
 
-                    plan = ImplementationPlan(**data)
-                    response = plan.model_dump()
+                    if model:
+                        plan = model(**data)
+                        response = plan.model_dump()
+                    else:
+                        response = data
                     
                     seen = set()
                     unique = []
@@ -447,11 +508,9 @@ async def setup(bot):
     @bot.tree.context_menu(name="Finalize Implementation")
     async def implement(interaction: discord.Interaction, msg: discord.Message):
         await interaction.response.defer()
-        context = await cog.getContext(msg)
-        reply: ChatResponse = await AsyncClient().chat(**cog.chat, messages=context)
-
+        
         # Parse the raw JSON into a plan before formatting
-        raw = reply.message.content
+        raw = msg.content
         plan = None
         try:
             start = raw.find('{')
@@ -460,12 +519,19 @@ async def setup(bot):
                 import json as _json
                 data = _json.loads(raw[start:end])
                 if "actions" in data or "comments" in data:
-                    from models import ImplementationPlan
-                    plan = ImplementationPlan(**data).model_dump()
+                    from models import RoleImplementationPlan, ChannelImplementationPlan
+                    # Determine type loosely
+                    is_role = False
+                    for act in data.get("actions", []):
+                        if act.get("action") == "role":
+                            is_role = True
+                            break
+                    model = RoleImplementationPlan if is_role else ChannelImplementationPlan
+                    plan = model(**data).model_dump()
         except Exception: pass
 
-        parts = await cog.processResponse(msg.guild, raw)
-        for i, text in enumerate(parts):
-            view = ImplementationButtons(cog=cog, plan=plan) if (i == 0 and plan) else None
-            if i == 0: await interaction.followup.send(text, view=view)
-            else: await msg.reply(text)
+        if plan:
+            view = ImplementationButtons(cog=cog, plan=plan)
+            await interaction.followup.send("Are you sure you want to deploy this implementation?", view=view)
+        else:
+            await interaction.followup.send("Could not parse a valid plan from this message.", ephemeral=True)
