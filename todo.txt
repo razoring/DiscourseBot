@@ -1,4 +1,5 @@
 NOW:
+- ENSURE ONLY PEOPLE WITH MANAGE_GUILD CAN USE THESE COMMANDS
 - Handle roles, channels, and categories
 - Category access (could be done implicitly when model "hallucinates" category)
 - Dynamically choose when to append data: current roles, role permissions, current channels, channel permissions
