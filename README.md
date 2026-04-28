@@ -1,1 +1,1 @@
-Automate Server Creation
+Automate Discord Server Creation
